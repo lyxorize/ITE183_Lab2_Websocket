@@ -47,7 +47,7 @@ bonezegei app.bzg
 
 Demonstrating successful installation of **Bonezegei v1.3.3**.
 
-![bzg -v](documentation/BZGversion.png)
+![bzg -v](documentation/BZG_version.png)
 
 **Figure 1**: Terminal output showing version `1.3.3`.
 
@@ -59,7 +59,7 @@ Demonstrating successful installation of **Bonezegei v1.3.3**.
 
 ### Multi-Client Real-Time Interaction
 
-![talkin](documentation/real-time.png)
+![talkin](documentation/REALTIME.png)
 
 **Figure 3**: Multi-client concurrent session testing demonstrating real-time local message broadcasting, username rendering, and character updates.
 
