@@ -5,10 +5,20 @@
   <title>Gielinor BSL - WebSocket Realm</title>
   <style>
     body { font-family: "Courier New", Courier, monospace; text-align: center; background-color: #1a1a1a; color: #d4c4a1; margin: 0; padding: 20px; }
-    h2 { color: #ffcc00; text-shadow: 2px 2px 0px #000; }
+    h2 { color: #ffcc00; text-shadow: 2px 2px 0px #000; margin-top: 0; }
     #gameCanvas { background-color: #2b4f2b; border: 6px solid #4a3b2c; border-radius: 4px; cursor: crosshair; }
-    #controls { margin-top: 15px; display: flex; justify-content: center; gap: 10px; }
+    #controls { margin-top: 10px; display: flex; justify-content: center; gap: 10px; }
     #teleportControls { margin-bottom: 10px; background: #3b2c1d; padding: 10px; border: 2px solid #5a4530; display: inline-block; }
+    
+    /* New Chatbox Styles */
+    #chatLog {
+      width: 680px; height: 120px; margin: 10px auto; background: rgba(0, 0, 0, 0.8);
+      border: 4px solid #4a3b2c; border-radius: 4px; text-align: left; padding: 10px; 
+      overflow-y: auto; color: #fff; font-size: 14px;
+    }
+    .chat-local { color: #ffff00; }
+    .chat-system { color: #00ff00; }
+    
     input { padding: 8px; width: 300px; background: #000; color: #ffcc00; border: 2px solid #5a4530; font-family: "Courier New"; }
     button { padding: 8px 16px; border: 2px solid #5a4530; background-color: #4a3b2c; color: #ffcc00; font-weight: bold; cursor: pointer; font-family: "Courier New"; }
     button:hover { background-color: #5a4530; }
@@ -29,6 +39,8 @@
   <br>
 
   <canvas id="gameCanvas" width="700" height="400"></canvas>
+  
+  <div id="chatLog"></div>
 
   <div id="controls">
     <input type="text" id="chatInput" placeholder="Enter text to chat..." disabled />
@@ -36,14 +48,14 @@
   </div>
 
   <script>
-    const lumbBg = new Image();
-    lumbBg.src = "lumbridge.png";
+    // 1. Get Username Prompt
+    let myUsername = prompt("Enter your character name:", "Adventurer") || "Adventurer";
+    myUsername = myUsername.replace(/:/g, ""); // Strip colons to avoid breaking the payload split
+    if (myUsername.trim() === "") myUsername = "Player";
 
-    const varrockBg = new Image();
-    varrockBg.src = "varrock.png";
-
-    const playerSprite = new Image();
-    playerSprite.src = "player.png";
+    const lumbBg = new Image(); lumbBg.src = "lumbridge.png";
+    const varrockBg = new Image(); varrockBg.src = "varrock.png";
+    const playerSprite = new Image(); playerSprite.src = "player.png";
 
     const SPRITE_SIZE = 40;
     
@@ -56,13 +68,19 @@
     const statusDiv = document.getElementById("status");
     const chatInput = document.getElementById("chatInput");
     const sendBtn = document.getElementById("sendBtn");
+    const chatLog = document.getElementById("chatLog");
 
     let myClientId = null;
     let currentRegion = "Lumbridge";
     let players = {}; 
-
-    // OSRS style default bot colors
     const colors = ["#2b6b39", "#722929", "#264870", "#635022", "#4a4a4a"];
+
+    function appendChat(name, msg, className) {
+      const entry = document.createElement("div");
+      entry.innerHTML = `<span class="${className}">[Local] ${name}: ${msg}</span>`;
+      chatLog.appendChild(entry);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
 
     function castTeleport(newRegion) {
       if (currentRegion === newRegion) return;
@@ -70,6 +88,8 @@
       currentRegion = newRegion;
       document.getElementById("btnLumbridge").classList.toggle("activeSpell", currentRegion === "Lumbridge");
       document.getElementById("btnVarrock").classList.toggle("activeSpell", currentRegion === "Varrock");
+      
+      appendChat("System", `You cast a teleport spell to ${currentRegion}.`, "chat-system");
 
       if (myClientId && players[myClientId]) {
         const startX = 350;
@@ -82,12 +102,12 @@
         players[myClientId].targetX = startX;
         players[myClientId].targetY = startY;
 
-        socket.send(`MOVE:${currentRegion}:${myClientId}:${startX}:${startY}:${color}`);
+        socket.send(`MOVE:${currentRegion}:${myClientId}:${myUsername}:${startX}:${startY}:${color}`);
       }
     }
 
     socket.onopen = function() {
-      statusDiv.textContent = "Connection Established.";
+      statusDiv.textContent = `Connection Established as ${myUsername}.`;
       chatInput.disabled = false;
       sendBtn.disabled = false;
     };
@@ -101,47 +121,63 @@
         const startY = Math.floor(Math.random() * 200) + 100;
         const color = colors[myClientId % colors.length];
 
-        socket.send(`MOVE:${currentRegion}:${myClientId}:${startX}:${startY}:${color}`);
+        // Payload now includes myUsername
+        socket.send(`MOVE:${currentRegion}:${myClientId}:${myUsername}:${startX}:${startY}:${color}`);
+        appendChat("System", `Welcome to Gielinor, ${myUsername}.`, "chat-system");
       } 
       else if (data.startsWith("MOVE:")) {
-        const [_, region, id, targetX, targetY, color] = data.split(":");
-        const tx = parseInt(targetX);
-        const ty = parseInt(targetY);
+        // Splitting updated payload structure
+        const parts = data.split(":");
+        const region = parts[1];
+        const id = parts[2];
+        const username = parts[3];
+        const tx = parseInt(parts[4]);
+        const ty = parseInt(parts[5]);
+        const color = parts[6];
 
         if (!players[id]) {
           players[id] = {
             region: region,
-            x: tx,
-            y: ty,
-            targetX: tx,
-            targetY: ty,
-            speed: 2, // Slower tick-based movement feel
-            color: color,
-            msg: "",
-            msgTimer: null
+            username: username,
+            x: tx, y: ty, targetX: tx, targetY: ty,
+            speed: 2, color: color, msg: "", msgTimer: null
           };
           
+          // Re-broadcast own position to new connections
           if (id !== myClientId && myClientId && players[myClientId]) {
             const myPos = players[myClientId];
-            socket.send(`MOVE:${myPos.region}:${myClientId}:${myPos.targetX}:${myPos.targetY}:${myPos.color}`);
+            socket.send(`MOVE:${myPos.region}:${myClientId}:${myUsername}:${myPos.targetX}:${myPos.targetY}:${myPos.color}`);
           }
         } else {
           players[id].region = region;
+          players[id].username = username;
           players[id].targetX = tx;
           players[id].targetY = ty;
           players[id].color = color;
         }
       } 
       else if (data.startsWith("CHAT:")) {
-        const [_, region, id, text] = data.split(":");
-        if (players[id] && region === currentRegion) {
-          players[id].msg = text;
-          clearTimeout(players[id].msgTimer);
-          players[id].msgTimer = setTimeout(() => { players[id].msg = ""; }, 5000);
+        const parts = data.split(":");
+        const region = parts[1];
+        const id = parts[2];
+        const username = parts[3];
+        const text = parts.slice(4).join(":"); // Re-join in case text has colons
+
+        // Location Chat Check: Only process if in the same region
+        if (region === currentRegion) {
+          if (players[id]) {
+            players[id].msg = text;
+            clearTimeout(players[id].msgTimer);
+            players[id].msgTimer = setTimeout(() => { players[id].msg = ""; }, 5000);
+          }
+          appendChat(username, text, "chat-local");
         }
       } 
       else if (data.startsWith("LEAVE:")) {
-        const [_, id] = data.split(":");
+        const id = data.split(":")[1];
+        if (players[id] && players[id].region === currentRegion) {
+            appendChat("System", `${players[id].username} logged out.`, "chat-system");
+        }
         delete players[id];
       }
     };
@@ -157,13 +193,13 @@
       players[myClientId].targetX = targetX;
       players[myClientId].targetY = targetY;
 
-      socket.send(`MOVE:${currentRegion}:${myClientId}:${targetX}:${targetY}:${color}`);
+      socket.send(`MOVE:${currentRegion}:${myClientId}:${myUsername}:${targetX}:${targetY}:${color}`);
     });
 
     function sendChatMessage() {
       const text = chatInput.value.trim();
       if (text && socket.readyState === WebSocket.OPEN) {
-        socket.send(`CHAT:${currentRegion}:${myClientId}:${text}`);
+        socket.send(`CHAT:${currentRegion}:${myClientId}:${myUsername}:${text}`);
         chatInput.value = "";
       }
     }
@@ -174,31 +210,26 @@
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+      // Render Backgrounds
       if (currentRegion === "Lumbridge") {
-        if (lumbBg.complete && lumbBg.naturalWidth !== 0) {
-          ctx.drawImage(lumbBg, 0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.fillStyle = "#2b4f2b";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = "#ffcc00";
-          ctx.font = "bold 20px 'Courier New'";
+        if (lumbBg.complete && lumbBg.naturalWidth !== 0) ctx.drawImage(lumbBg, 0, 0, canvas.width, canvas.height);
+        else {
+          ctx.fillStyle = "#2b4f2b"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#ffcc00"; ctx.font = "bold 20px 'Courier New'";
           ctx.fillText("LUMBRIDGE (Upload lumbridge.png)", 150, 40);
         }
       } else {
-        if (varrockBg.complete && varrockBg.naturalWidth !== 0) {
-          ctx.drawImage(varrockBg, 0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.fillStyle = "#4a4a4a";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = "#ffcc00";
-          ctx.font = "bold 20px 'Courier New'";
+        if (varrockBg.complete && varrockBg.naturalWidth !== 0) ctx.drawImage(varrockBg, 0, 0, canvas.width, canvas.height);
+        else {
+          ctx.fillStyle = "#4a4a4a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#ffcc00"; ctx.font = "bold 20px 'Courier New'";
           ctx.fillText("VARROCK (Upload varrock.png)", 150, 40);
         }
       }
 
+      // Render Players
       for (let id in players) {
         const p = players[id];
-
         const dx = p.targetX - p.x;
         const dy = p.targetY - p.y;
         const dist = Math.hypot(dx, dy);
@@ -212,6 +243,7 @@
         }
 
         if (p.region === currentRegion) {
+          // Sprite fallback
           if (playerSprite.complete && playerSprite.naturalWidth !== 0) {
             ctx.drawImage(playerSprite, p.x - SPRITE_SIZE / 2, p.y - SPRITE_SIZE / 2, SPRITE_SIZE, SPRITE_SIZE);
           } else {
@@ -221,31 +253,28 @@
             ctx.fillRect(p.x - 8, p.y - 28, 16, 16);
           }
 
+          // Username Rendering (Centered)
           ctx.fillStyle = "#fff";
-          ctx.font = "bold 10px 'Courier New'";
-          ctx.fillText(`Bot_${id}`, p.x - 20, p.y + 30);
+          ctx.font = "bold 12px 'Courier New'";
+          const nameWidth = ctx.measureText(p.username).width;
+          ctx.fillText(p.username, p.x - (nameWidth / 2), p.y + 35);
 
+          // Overhead Chat Bubble
           if (p.msg) {
             ctx.fillStyle = "#ffff00";
             ctx.font = "bold 14px 'Courier New'";
-            ctx.shadowColor = "#000";
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetX = 1;
-            ctx.shadowOffsetY = 1;
+            ctx.shadowColor = "#000"; ctx.shadowBlur = 3;
+            ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 2;
             
             const textWidth = ctx.measureText(p.msg).width;
             ctx.fillText(p.msg, p.x - (textWidth / 2), p.y - 40);
             
-            ctx.shadowBlur = 0;
-            ctx.shadowOffsetX = 0;
-            ctx.shadowOffsetY = 0;
+            ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
           }
         }
       }
-
       requestAnimationFrame(draw);
     }
-
     draw();
   </script>
 </body>
