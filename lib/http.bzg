@@ -1,1 +1,1 @@
-loadNative("http/http.so", "http");
+loadNative("http/http.dll", "http");
